@@ -496,6 +496,18 @@ def to_excel_bytes(backward_out, campaign_df_original, master_original, media_fr
     return bio.getvalue()
 
 
+# ダウンロード後の再実行でも成果物を保持する
+if "display_bytes" not in st.session_state:
+    st.session_state.display_bytes = None
+if "search_bytes" not in st.session_state:
+    st.session_state.search_bytes = None
+if "report_elapsed" not in st.session_state:
+    st.session_state.report_elapsed = None
+if "report_processed" not in st.session_state:
+    st.session_state.report_processed = []
+if "report_skipped" not in st.session_state:
+    st.session_state.report_skipped = []
+
 st.subheader("ファイルをアップロード")
 file1 = st.file_uploader("後方数値データ（後方数値データ(加工版)・キャンペーン情報・媒体コードマスタ）", type=["xlsx", "xlsm"], accept_multiple_files=False)
 file2s = st.file_uploader("媒体ローデータ　※複数可", type=["xlsx", "xlsm"], accept_multiple_files=True)
@@ -578,31 +590,47 @@ if st.button("レポートを作成", type="primary", disabled=not (file1 and fi
             elapsed = time.perf_counter() - started_at
             progress.empty()
 
-        st.success(f"完成しました！ 処理時間：{elapsed:.1f}秒")
+        # download_button を押すとStreamlitは再実行されるため、成果物をSession Stateへ保存
+        st.session_state.display_bytes = display_bytes
+        st.session_state.search_bytes = search_bytes
+        st.session_state.report_elapsed = elapsed
+        st.session_state.report_processed = processed
+        st.session_state.report_skipped = skipped
         st.balloons()
-        st.write(" / ".join(processed) if processed else "有効な媒体ローデータは0行でした。")
-        if skipped:
-            with st.expander("スキップしたシート"):
-                st.write("\n".join(skipped))
-        col1, col2 = st.columns(2)
-        with col1:
-            st.download_button(
-                "後方数値分析用(Display).xlsx をダウンロード",
-                data=display_bytes,
-                file_name="後方数値分析用(Display).xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                use_container_width=True,
-            )
-        with col2:
-            st.download_button(
-                "後方数値分析用(Search).xlsx をダウンロード",
-                data=search_bytes,
-                file_name="後方数値分析用(Search).xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                use_container_width=True,
-            )
     except Exception as e:
         st.error(str(e))
         st.exception(e)
+
+# 成果物は「レポートを作成」ボタンの外で表示する。
+# ダウンロードによる再実行後もSession Stateから復元されるので、両方取得できる。
+if st.session_state.display_bytes is not None and st.session_state.search_bytes is not None:
+    elapsed = st.session_state.report_elapsed
+    st.success(f"完成しました！ 処理時間：{elapsed:.1f}秒")
+    processed = st.session_state.report_processed
+    skipped = st.session_state.report_skipped
+    st.write(" / ".join(processed) if processed else "有効な媒体ローデータは0行でした。")
+    if skipped:
+        with st.expander("スキップしたシート"):
+            st.write("\n".join(skipped))
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            "後方数値分析用(Display).xlsx をダウンロード",
+            data=st.session_state.display_bytes,
+            file_name="後方数値分析用(Display).xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True,
+            key="download_display",
+        )
+    with col2:
+        st.download_button(
+            "後方数値分析用(Search).xlsx をダウンロード",
+            data=st.session_state.search_bytes,
+            file_name="後方数値分析用(Search).xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True,
+            key="download_search",
+        )
