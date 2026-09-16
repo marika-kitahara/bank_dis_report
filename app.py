@@ -9,7 +9,7 @@ import streamlit as st
 
 st.set_page_config(page_title="後方数値分析用(Display)", layout="wide")
 st.title("後方数値分析用(Display) 作成")
-st.caption("ファイル1 + 複数のファイル2をアップロードして、集計済みExcelを出力します。")
+st.caption("集計済みExcelを出力します。")
 
 OUTPUT_COLUMNS = ["日", "キャンペーン", "表示回数", "クリック数", "コンバージョン", "通貨コード", "費用"]
 MEDIA_ORDER = ["YDN", "Pmax", "LINE", "Youtube", "Criteo", "Meta", "X"]
@@ -443,9 +443,8 @@ def to_excel_bytes(backward_out, campaign_df_original, master_original, media_fr
 
 
 st.subheader("1. ファイルをアップロード")
-file1 = st.file_uploader("ファイル1（後方数値データ(加工版)・キャンペーン情報・媒体コードマスタ）", type=["xlsx", "xlsm"], accept_multiple_files=False)
-file2s = st.file_uploader("ファイル2（媒体ローデータ）※複数可", type=["xlsx", "xlsm"], accept_multiple_files=True)
-st.info("媒体コードマスタはファイル1内の「媒体コードマスタ」「MediaMaster」「媒体コードマスタver3」から自動取得します。")
+file1 = st.file_uploader("後方数値データ（後方数値データ(加工版)・キャンペーン情報・媒体コードマスタ）", type=["xlsx", "xlsm"], accept_multiple_files=False)
+file2s = st.file_uploader("媒体ローデータ　※複数可", type=["xlsx", "xlsm"], accept_multiple_files=True)
 
 if st.button("レポートを作成", type="primary", disabled=not (file1 and file2s)):
     try:
