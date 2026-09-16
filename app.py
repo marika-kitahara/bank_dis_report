@@ -14,6 +14,7 @@ st.caption("同じアップロードデータから Display / Search の集計�
 OUTPUT_COLUMNS = ["日", "キャンペーン", "表示回数", "クリック数", "コンバージョン", "通貨コード", "費用"]
 DISPLAY_MEDIA_ORDER = ["YDN", "Pmax", "LINE", "Youtube", "Criteo", "Meta", "X"]
 SEARCH_MEDIA_ORDER = ["GSA", "YSS", "MSA"]
+MASTER_MEDIA_NAME = {"Youtube": "YouTube", "Pmax": "P-MAX"}
 MEDIA_ORDER = DISPLAY_MEDIA_ORDER + SEARCH_MEDIA_ORDER
 DISPLAY_RAW_SHEETS = {
     "YDN": "【YDN】ローデータ",
@@ -218,10 +219,40 @@ def build_backward_index(backward):
 def media_codes_for_row_fast(campaign_name, period, media, master_index):
     if not period:
         return []
-    parts = [p.lower() for p in str(campaign_name).split("_") if p]
-    candidates = master_index.get((str(period), media), [])
+
+    campaign = normalize_text(campaign_name).lower()
+    master_media = MASTER_MEDIA_NAME.get(media, media)
+    candidates = master_index.get((str(period), master_media), [])
     seen = set()
     codes = []
+
+    # Search媒体は完成ExcelのPower Queryと同じく、
+    # ローデータのキャンペーン名そのものが媒体コードマスタの「メニュー名」に
+    # 含まれるかで判定する。MSAだけ先頭の【SEP】を除いて照合する。
+    if media in SEARCH_MEDIA_ORDER:
+        if media == "MSA":
+            campaign = re.sub(r"^【sep】", "", campaign, flags=re.IGNORECASE).strip()
+        if not campaign:
+            return []
+        for menu_lower, code in candidates:
+            if campaign in menu_lower and code not in seen:
+                seen.add(code)
+                codes.append(code)
+        return codes
+
+    # DisplayのYouTube / P-MAXは、ローデータのキャンペーン名が
+    # 媒体コードマスタの「メニュー名」に含まれるかで判定する。
+    if media in ("Youtube", "Pmax"):
+        if not campaign:
+            return []
+        for menu_lower, code in candidates:
+            if campaign in menu_lower and code not in seen:
+                seen.add(code)
+                codes.append(code)
+        return codes
+
+    # その他Display媒体は従来ロジックを維持
+    parts = [p for p in campaign.split("_") if p]
     for menu_lower, code in candidates:
         if (not parts or all(p in menu_lower for p in parts)) and code not in seen:
             seen.add(code)
@@ -238,7 +269,12 @@ def add_matching_columns_fast(df, media, campaign_date_map, master_index, backwa
         media_codes_for_row_fast(cn, p, media, master_index)
         for cn, p in zip(x["キャンペーン"], periods)
     ]
-    code_texts = ["該当なし" if not cs else f"{len(cs)}種類 ({'、'.join(cs)})" for cs in codes_list]
+    # 完成版Search Excelに合わせ、MSAは媒体コードのみを「、」区切りで出力。
+    # GSA/YSSおよびDisplay媒体は「n種類 (code...)」形式。
+    if media == "MSA":
+        code_texts = ["該当なし" if not cs else "、".join(cs) for cs in codes_list]
+    else:
+        code_texts = ["該当なし" if not cs else f"{len(cs)}種類 ({'、'.join(cs)})" for cs in codes_list]
     code_texts_lower = [t.lower() for t in code_texts]
 
     x["期間"] = periods
@@ -509,90 +545,136 @@ if "report_skipped" not in st.session_state:
     st.session_state.report_skipped = []
 
 st.subheader("ファイルをアップロード")
-file1 = st.file_uploader("後方数値データ（後方数値データ(加工版)・キャンペーン情報・媒体コードマスタ）", type=["xlsx", "xlsm"], accept_multiple_files=False)
-file2s = st.file_uploader("媒体ローデータ　※複数可", type=["xlsx", "xlsm"], accept_multiple_files=True)
+col_display, col_search = st.columns(2)
+with col_display:
+    display_file = st.file_uploader(
+        "Display用 後方数値データ",
+        type=["xlsx", "xlsm"],
+        accept_multiple_files=False,
+        key="display_backward_file",
+        help="後方数値データ(加工版)・キャンペーン情報・Display用媒体コードマスタを含むファイル",
+    )
+with col_search:
+    search_file = st.file_uploader(
+        "Search用 後方数値データ",
+        type=["xlsx", "xlsm"],
+        accept_multiple_files=False,
+        key="search_backward_file",
+        help="後方数値データ(加工版)・キャンペーン情報・Search用媒体コードマスタを含むファイル",
+    )
 
-if st.button("レポートを作成", type="primary", disabled=not (file1 and file2s)):
+file2s = st.file_uploader("媒体ローデータ　※複数可（Display / Search共通）", type=["xlsx", "xlsm"], accept_multiple_files=True)
+
+
+def prepare_base_file(file_obj, label):
+    backward = find_first_sheet(file_obj, ["後方数値データ(加工版)"])
+    campaign_original = find_first_sheet(file_obj, ["キャンペーン情報", "Campaign"])
+    master_original = find_first_sheet(file_obj, ["媒体コードマスタ", "MediaMaster", "媒体コードマスタver3"])
+    if backward is None:
+        raise ValueError(f"{label}用ファイルに「後方数値データ(加工版)」シートがありません。")
+    if campaign_original is None:
+        raise ValueError(f"{label}用ファイルに「キャンペーン情報」シートがありません。")
+    if master_original is None:
+        raise ValueError(f"{label}用ファイルに媒体コードマスタが見つかりません。")
+    if backward.shape[1] < 31:
+        raise ValueError(f"{label}用の後方数値データ(加工版)にAE列まで存在しません。")
+
+    campaign = prepare_campaign(campaign_original)
+    master = prepare_media_master(master_original)
+    backward = backward.copy()
+    backward["__date"] = coerce_date(backward.iloc[:, 1])
+    backward["__code"] = backward.iloc[:, 2].map(normalize_text)
+    backward["__media"] = backward.iloc[:, 30].map(normalize_text)
+    return {
+        "backward": backward,
+        "campaign_original": campaign_original,
+        "master_original": master_original,
+        "campaign_date_map": build_campaign_date_map(campaign),
+        "master_index": build_master_index(master),
+        "backward_index": build_backward_index(backward),
+    }
+
+
+can_run = bool(file2s) and bool(display_file or search_file)
+if st.button("レポートを作成", type="primary", disabled=not can_run):
     try:
         started_at = time.perf_counter()
-        with st.spinner("読込・集計中…"):
-            backward = find_first_sheet(file1, ["後方数値データ(加工版)"])
-            campaign_original = find_first_sheet(file1, ["キャンペーン情報", "Campaign"])
-            if backward is None:
-                raise ValueError("ファイル1に「後方数値データ(加工版)」シートがありません。")
-            if campaign_original is None:
-                raise ValueError("ファイル1に「キャンペーン情報」シートがありません。")
+        progress = st.progress(0, text="読込・集計中…")
 
-            # 媒体コードマスタを探索
-            master_original = find_first_sheet(file1, ["媒体コードマスタ", "MediaMaster", "媒体コードマスタver3"])
-            if master_original is None:
-                raise ValueError("ファイル1に媒体コードマスタが見つかりません。")
+        # 今回アップロードされていない側の古い成果物は消す。
+        if display_file is None:
+            st.session_state.display_bytes = None
+        if search_file is None:
+            st.session_state.search_bytes = None
 
-            campaign = prepare_campaign(campaign_original)
-            master = prepare_media_master(master_original)
+        bases = {}
+        if display_file is not None:
+            bases["Display"] = prepare_base_file(display_file, "Display")
+        if search_file is not None:
+            bases["Search"] = prepare_base_file(search_file, "Search")
 
-            # 後方数値データの参照列 B/C/AE を列位置で取得（Excel基準）
-            if backward.shape[1] < 31:
-                raise ValueError("後方数値データ(加工版)にAE列まで存在しません。")
-            backward = backward.copy()
-            backward["__date"] = coerce_date(backward.iloc[:, 1])   # B列
-            backward["__code"] = backward.iloc[:, 2].map(normalize_text)  # C列
-            backward["__media"] = backward.iloc[:, 30].map(normalize_text)  # AE列
-
-            # 高速化用インデックスを最初に一度だけ作成
-            campaign_date_map = build_campaign_date_map(campaign)
-            master_index = build_master_index(master)
-            backward_index = build_backward_index(backward)
-
-            # 複数ファイル2を媒体別に縦結合。シート欠落/空はスキップ。
-            raw_by_media = defaultdict(list)
-            skipped = []
-            for f in file2s:
-                for media, sheet in RAW_SHEETS.items():
-                    try:
-                        df = read_sheet(f, sheet)
-                        if df is not None:
-                            raw_by_media[media].append(df)
-                        else:
-                            label = " / ".join(sheet) if isinstance(sheet, list) else sheet
-                            skipped.append(f"{f.name} / {label}: 空またはシートなし")
-                    except Exception as e:
+        # ローデータはDisplay/Search共通で一度だけ読み込む。
+        raw_by_media = defaultdict(list)
+        skipped = []
+        for f in file2s:
+            for media, sheet in RAW_SHEETS.items():
+                try:
+                    df = read_sheet(f, sheet)
+                    if df is not None:
+                        raw_by_media[media].append(df)
+                    else:
                         label = " / ".join(sheet) if isinstance(sheet, list) else sheet
-                        raise ValueError(f"{f.name} / {label} の読込でエラー: {e}") from e
+                        skipped.append(f"{f.name} / {label}: 空またはシートなし")
+                except Exception as e:
+                    label = " / ".join(sheet) if isinstance(sheet, list) else sheet
+                    raise ValueError(f"{f.name} / {label} の読込でエラー: {e}") from e
 
+        processed = []
+        outputs = {}
+        jobs = []
+        if "Display" in bases:
+            jobs.append(("Display", DISPLAY_MEDIA_ORDER))
+        if "Search" in bases:
+            jobs.append(("Search", SEARCH_MEDIA_ORDER))
+
+        for job_no, (label, media_order) in enumerate(jobs, start=1):
+            base = bases[label]
             media_frames = {}
-            processed = []
-            progress = st.progress(0, text="媒体データを処理中…")
-            for media_no, media in enumerate(MEDIA_ORDER, start=1):
+            for media_no, media in enumerate(media_order, start=1):
                 if raw_by_media[media]:
                     raw = pd.concat(raw_by_media[media], ignore_index=True)
                     std = standardize_media(raw, media)
-                    calc = add_matching_columns_fast(std, media, campaign_date_map, master_index, backward_index)
+                    calc = add_matching_columns_fast(
+                        std, media,
+                        base["campaign_date_map"],
+                        base["master_index"],
+                        base["backward_index"],
+                    )
                     media_frames[media] = calc
-                    processed.append(f"{media}: {len(calc):,}行")
+                    processed.append(f"{label} {media}: {len(calc):,}行")
                 else:
                     media_frames[media] = pd.DataFrame()
-                progress.progress(0.08 + media_no * 0.07, text=f"集計：{media} を処理しました")
+                frac = (job_no - 1 + media_no / max(len(media_order), 1)) / max(len(jobs), 1)
+                progress.progress(min(0.15 + 0.50 * frac, 0.65), text=f"集計：{label} / {media} を処理中…")
 
-            progress.progress(0.62, text="集計：Displayの後方数値へコストを反映中…")
-            display_frames = {m: media_frames[m] for m in DISPLAY_MEDIA_ORDER}
-            search_frames = {m: media_frames[m] for m in SEARCH_MEDIA_ORDER}
-            backward_display = calculate_backward_cost_fast(backward, display_frames, backward_index)
+            backward_out = calculate_backward_cost_fast(base["backward"], media_frames, base["backward_index"])
+            progress.progress(0.68 if label == "Display" else 0.82, text=f"{label} Excelを出力中…")
+            outputs[label] = to_excel_bytes(
+                backward_out,
+                base["campaign_original"],
+                base["master_original"],
+                media_frames,
+                media_order,
+            )
 
-            progress.progress(0.68, text="集計：Searchの後方数値へコストを反映中…")
-            backward_search = calculate_backward_cost_fast(backward, search_frames, backward_index)
+        elapsed = time.perf_counter() - started_at
+        progress.progress(1.0, text="完了！")
+        progress.empty()
 
-            progress.progress(0.74, text="Display Excelを出力中…")
-            display_bytes = to_excel_bytes(backward_display, campaign_original, master_original, display_frames, DISPLAY_MEDIA_ORDER)
-            progress.progress(0.87, text="Search Excelを出力中…")
-            search_bytes = to_excel_bytes(backward_search, campaign_original, master_original, search_frames, SEARCH_MEDIA_ORDER)
-            progress.progress(1.0, text="完了！")
-            elapsed = time.perf_counter() - started_at
-            progress.empty()
-
-        # download_button を押すとStreamlitは再実行されるため、成果物をSession Stateへ保存
-        st.session_state.display_bytes = display_bytes
-        st.session_state.search_bytes = search_bytes
+        if "Display" in outputs:
+            st.session_state.display_bytes = outputs["Display"]
+        if "Search" in outputs:
+            st.session_state.search_bytes = outputs["Search"]
         st.session_state.report_elapsed = elapsed
         st.session_state.report_processed = processed
         st.session_state.report_skipped = skipped
@@ -601,36 +683,39 @@ if st.button("レポートを作成", type="primary", disabled=not (file1 and fi
         st.error(str(e))
         st.exception(e)
 
-# 成果物は「レポートを作成」ボタンの外で表示する。
-# ダウンロードによる再実行後もSession Stateから復元されるので、両方取得できる。
-if st.session_state.display_bytes is not None and st.session_state.search_bytes is not None:
+# 片方だけ作成した場合も、その成果物だけダウンロードできる。
+if st.session_state.display_bytes is not None or st.session_state.search_bytes is not None:
     elapsed = st.session_state.report_elapsed
-    st.success(f"完成しました！ 処理時間：{elapsed:.1f}秒")
+    if elapsed is not None:
+        st.success(f"完成しました！ 処理時間：{elapsed:.1f}秒")
     processed = st.session_state.report_processed
     skipped = st.session_state.report_skipped
-    st.write(" / ".join(processed) if processed else "有効な媒体ローデータは0行でした。")
+    if processed:
+        st.write(" / ".join(processed))
     if skipped:
         with st.expander("スキップしたシート"):
             st.write("\n".join(skipped))
 
     col1, col2 = st.columns(2)
     with col1:
-        st.download_button(
-            "後方数値分析用(Display).xlsx をダウンロード",
-            data=st.session_state.display_bytes,
-            file_name="後方数値分析用(Display).xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True,
-            key="download_display",
-        )
+        if st.session_state.display_bytes is not None:
+            st.download_button(
+                "後方数値分析用(Display).xlsx をダウンロード",
+                data=st.session_state.display_bytes,
+                file_name="後方数値分析用(Display).xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary", use_container_width=True, key="download_display",
+            )
+        else:
+            st.info("Display用ファイルは未作成です。")
     with col2:
-        st.download_button(
-            "後方数値分析用(Search).xlsx をダウンロード",
-            data=st.session_state.search_bytes,
-            file_name="後方数値分析用(Search).xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True,
-            key="download_search",
-        )
+        if st.session_state.search_bytes is not None:
+            st.download_button(
+                "後方数値分析用(Search).xlsx をダウンロード",
+                data=st.session_state.search_bytes,
+                file_name="後方数値分析用(Search).xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary", use_container_width=True, key="download_search",
+            )
+        else:
+            st.info("Search用ファイルは未作成です。")
