@@ -442,7 +442,7 @@ def to_excel_bytes(backward_out, campaign_df_original, master_original, media_fr
     return bio.getvalue()
 
 
-st.subheader("1. ファイルをアップロード")
+st.subheader("ファイルをアップロード")
 file1 = st.file_uploader("後方数値データ（後方数値データ(加工版)・キャンペーン情報・媒体コードマスタ）", type=["xlsx", "xlsm"], accept_multiple_files=False)
 file2s = st.file_uploader("媒体ローデータ　※複数可", type=["xlsx", "xlsm"], accept_multiple_files=True)
 
