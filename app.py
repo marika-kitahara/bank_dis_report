@@ -7,13 +7,15 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="後方数値分析用(Display)", layout="wide")
-st.title("後方数値分析用(Display) 作成")
-st.caption("集計済みExcelを出力します。")
+st.set_page_config(page_title="後方数値分析用 作成", layout="wide")
+st.title("後方数値分析用 作成")
+st.caption("同じアップロードデータから Display / Search の集計済みExcelをそれぞれ出力します。")
 
 OUTPUT_COLUMNS = ["日", "キャンペーン", "表示回数", "クリック数", "コンバージョン", "通貨コード", "費用"]
-MEDIA_ORDER = ["YDN", "Pmax", "LINE", "Youtube", "Criteo", "Meta", "X"]
-RAW_SHEETS = {
+DISPLAY_MEDIA_ORDER = ["YDN", "Pmax", "LINE", "Youtube", "Criteo", "Meta", "X"]
+SEARCH_MEDIA_ORDER = ["GSA", "YSS", "MSA"]
+MEDIA_ORDER = DISPLAY_MEDIA_ORDER + SEARCH_MEDIA_ORDER
+DISPLAY_RAW_SHEETS = {
     "YDN": "【YDN】ローデータ",
     "Pmax": "【Pmax】ローデータ",
     "LINE": "【LINE】ローデータ",
@@ -22,6 +24,13 @@ RAW_SHEETS = {
     "Meta": ["【Facebook】ローデータ", "【Facabook】ローデータ"],  # 正式表記＋旧仕様の誤記も許容
     "X": "【X】ローデータ",
 }
+
+SEARCH_RAW_SHEETS = {
+    "GSA": "【GSA】ローデータ",
+    "YSS": "【YSA】ローデータ",
+    "MSA": "【MSA】ローデータ",
+}
+RAW_SHEETS = {**DISPLAY_RAW_SHEETS, **SEARCH_RAW_SHEETS}
 
 COLUMN_MAP = {
     "YDN": {
@@ -52,6 +61,19 @@ COLUMN_MAP = {
     "X": {
         "Time period": "日", "Ad Group name": "キャンペーン", "Impressions": "表示回数",
         "Clicks": "クリック数", "Leads": "コンバージョン", "Spend": "費用",
+    },
+    "GSA": {
+        "日": "日", "キャンペーン": "キャンペーン", "表示回数": "表示回数",
+        "クリック数": "クリック数", "コンバージョン": "コンバージョン",
+        "通貨コード": "通貨コード", "費用": "費用",
+    },
+    "YSS": {
+        "日": "日", "キャンペーン名": "キャンペーン", "インプレッション数": "表示回数",
+        "クリック数": "クリック数", "コンバージョン数": "コンバージョン", "コスト": "費用",
+    },
+    "MSA": {
+        "日付": "日", "キャンペーン名": "キャンペーン", "インプレッション": "表示回数",
+        "クリック数": "クリック数", "コンバージョン": "コンバージョン", "費用": "費用",
     },
 }
 
@@ -288,6 +310,33 @@ def calculate_backward_cost_fast(backward, media_frames, backward_index):
     result["集計コスト"] = costs
     return result
 
+
+def format_output_media(df, media):
+    """Search媒体だけ、指定された成果物の列名・列構成に戻す。K:PはDisplay共通。"""
+    if df is None or df.empty:
+        return df
+    x = df.copy()
+    if media == "GSA":
+        # GSAは標準名がそのまま指定成果物と一致
+        return x
+    if media == "YSS":
+        x = x.rename(columns={
+            "キャンペーン": "キャンペーン名", "表示回数": "インプレッション数",
+            "コンバージョン": "コンバージョン数", "費用": "コスト", "通貨コード": "列1",
+        })
+        order = ["日", "キャンペーン名", "インプレッション数", "クリック数", "コンバージョン数", "コスト", "列1",
+                 "媒体一致件数", "日付件数", "按分単価", "期間", "媒体コード", "種類数", "転記用コスト(net)", "転記用コスト(gross)", media]
+        return x[[c for c in order if c in x.columns]]
+    if media == "MSA":
+        x = x.rename(columns={
+            "日": "日付", "キャンペーン": "キャンペーン名", "表示回数": "インプレッション",
+            "費用": "費用", "通貨コード": "列1",
+        })
+        order = ["日付", "キャンペーン名", "インプレッション", "クリック数", "コンバージョン", "費用", "列1",
+                 "媒体一致件数", "日付件数", "按分単価", "期間", "媒体コード", "種類数", "転記用コスト(net)", "転記用コスト(gross)", media]
+        return x[[c for c in order if c in x.columns]]
+    return x
+
 def _excel_safe_df(df, null_as_text=False):
     """Excel出力用に日時を日付へ落とし、必要なら欠損を文字列NULLへ変換。"""
     out = df.copy()
@@ -365,8 +414,8 @@ def _write_df_fast(writer, sheet_name, df, null_as_text=False):
         ws.autofilter(0, 0, max(len(df), 1), len(df.columns) - 1)
 
 
-def _write_cost_diff_sheet(writer):
-    """添付の『コスト差分』シートを、出力ブック内参照に直して再現。"""
+def _write_cost_diff_sheet(writer, media_order):
+    """コスト差分シート。対象媒体はDisplay/Searchごとに切替。"""
     wb = writer.book
     ws = wb.add_worksheet("コスト差分")
     writer.sheets["コスト差分"] = ws
@@ -376,28 +425,32 @@ def _write_cost_diff_sheet(writer):
     hair_fmt = wb.add_format({"font_name": "Meiryo UI", "border": 7, "num_format": '#,##0_);[Red](#,##0)'})
     hair_text_fmt = wb.add_format({"font_name": "Meiryo UI", "border": 7})
 
-    # コスト差分シートは全列150px固定・目盛線なし
     ws.hide_gridlines(2)
-    for col_idx in range(0, 9):  # A:I
+    # B列＋媒体列まで150px固定
+    for col_idx in range(0, max(9, 2 + len(media_order))):
         fmt = num_fmt if col_idx >= 2 else text_fmt
         ws.set_column_pixels(col_idx, col_idx, 150, fmt)
     ws.write("B2", "コスト差分確認", text_fmt)
 
-    media = MEDIA_ORDER
-    for j, m in enumerate(media, start=2):
-        col_letter = chr(ord("A") + j)
+    for j, m in enumerate(media_order, start=2):
+        # XlsxWriter utilityを使わず、媒体数が少ないためExcel列文字を生成
+        n = j + 1
+        letters = ""
+        while n:
+            n, r = divmod(n - 1, 26)
+            letters = chr(65 + r) + letters
         ws.write(2, j, m, hair_text_fmt)
-        # 添付元の [1] 外部参照を、今回作るブック内のシート参照へ変更。
-        ws.write_formula(3, j, f'=SUMIF(\'後方数値データ(加工版)\'!$AE:$AE,{col_letter}$3,\'後方数値データ(加工版)\'!$AF:$AF)', hair_fmt)
-        ws.write_formula(4, j, f'=SUM(\'{m}\'!G:G)', hair_fmt)
-        ws.write_formula(5, j, f'={col_letter}4-{col_letter}5', num_fmt)
+        ws.write_formula(3, j, f'=SUMIF(\'後方数値データ(加工版)\'!$AE:$AE,{letters}$3,\'後方数値データ(加工版)\'!$AF:$AF)', hair_fmt)
+        cost_col = 'G' if m in DISPLAY_MEDIA_ORDER or m == 'GSA' else 'F'
+        ws.write_formula(4, j, f'=SUM(\'{m}\'!{cost_col}:{cost_col})', hair_fmt)
+        ws.write_formula(5, j, f'={letters}4-{letters}5', num_fmt)
 
     ws.write("B4", "後方数値", text_fmt)
     ws.write("B5", "ローデータ", text_fmt)
     ws.write("B6", "差分", text_fmt)
 
 
-def to_excel_bytes(backward_out, campaign_df_original, master_original, media_frames, progress=None):
+def to_excel_bytes(backward_out, campaign_df_original, master_original, media_frames, media_order, progress=None, progress_start=0.74, progress_end=1.0):
     """XlsxWriterベースの高速Excel出力。"""
     bio = io.BytesIO()
 
@@ -425,12 +478,13 @@ def to_excel_bytes(backward_out, campaign_df_original, master_original, media_fr
 
         # 添付シートは後方数値データの直後に配置
         if progress: progress.progress(0.80, text="Excel：コスト差分シートを作成中…")
-        _write_cost_diff_sheet(writer)
+        _write_cost_diff_sheet(writer, media_order)
 
-        for i, media in enumerate(MEDIA_ORDER):
+        for i, media in enumerate(media_order):
             if progress:
                 progress.progress(0.82 + i * 0.015, text=f"Excel：{media}を書き出し中…")
             df = media_frames.get(media, pd.DataFrame(columns=OUTPUT_COLUMNS + ["媒体一致件数", "日付件数", "按分単価", "期間", "媒体コード", "種類数", "転記用コスト(net)", "転記用コスト(gross)", media]))
+            df = format_output_media(df, media)
             _write_df_fast(writer, media, df)
 
         if progress: progress.progress(0.94, text="Excel：キャンペーン情報を書き出し中…")
@@ -508,10 +562,19 @@ if st.button("レポートを作成", type="primary", disabled=not (file1 and fi
                     media_frames[media] = pd.DataFrame()
                 progress.progress(0.08 + media_no * 0.07, text=f"集計：{media} を処理しました")
 
-            progress.progress(0.62, text="集計：後方数値へコストを反映中…")
-            backward_out = calculate_backward_cost_fast(backward, media_frames, backward_index)
-            progress.progress(0.74, text="集計完了。Excel出力を開始します…")
-            excel_bytes = to_excel_bytes(backward_out, campaign_original, master_original, media_frames, progress=progress)
+            progress.progress(0.62, text="集計：Displayの後方数値へコストを反映中…")
+            display_frames = {m: media_frames[m] for m in DISPLAY_MEDIA_ORDER}
+            search_frames = {m: media_frames[m] for m in SEARCH_MEDIA_ORDER}
+            backward_display = calculate_backward_cost_fast(backward, display_frames, backward_index)
+
+            progress.progress(0.68, text="集計：Searchの後方数値へコストを反映中…")
+            backward_search = calculate_backward_cost_fast(backward, search_frames, backward_index)
+
+            progress.progress(0.74, text="Display Excelを出力中…")
+            display_bytes = to_excel_bytes(backward_display, campaign_original, master_original, display_frames, DISPLAY_MEDIA_ORDER)
+            progress.progress(0.87, text="Search Excelを出力中…")
+            search_bytes = to_excel_bytes(backward_search, campaign_original, master_original, search_frames, SEARCH_MEDIA_ORDER)
+            progress.progress(1.0, text="完了！")
             elapsed = time.perf_counter() - started_at
             progress.empty()
 
@@ -521,13 +584,25 @@ if st.button("レポートを作成", type="primary", disabled=not (file1 and fi
         if skipped:
             with st.expander("スキップしたシート"):
                 st.write("\n".join(skipped))
-        st.download_button(
-            "後方数値分析用(Display).xlsx をダウンロード",
-            data=excel_bytes,
-            file_name="後方数値分析用(Display).xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-        )
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                "後方数値分析用(Display).xlsx をダウンロード",
+                data=display_bytes,
+                file_name="後方数値分析用(Display).xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+            )
+        with col2:
+            st.download_button(
+                "後方数値分析用(Search).xlsx をダウンロード",
+                data=search_bytes,
+                file_name="後方数値分析用(Search).xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+            )
     except Exception as e:
         st.error(str(e))
         st.exception(e)
