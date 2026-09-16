@@ -240,13 +240,19 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 codes.append(code)
         return codes
 
-    # DisplayのYouTube / P-MAXは、ローデータのキャンペーン名が
-    # 媒体コードマスタの「メニュー名」に含まれるかで判定する。
+    # DisplayのYoutube / Pmaxは大項目では判定しない。
+    # 媒体コードマスタの「メニュー名」に、媒体ごとの検索語
+    #   Youtube -> YouTube
+    #   Pmax    -> P-MAX
+    # が含まれる行を、同じテンプレコード（期間）の中から取得する。
     if media in ("Youtube", "Pmax"):
-        if not campaign:
-            return []
-        for menu_lower, code in candidates:
-            if campaign in menu_lower and code not in seen:
+        keyword = "youtube" if media == "Youtube" else "p-max"
+        period_candidates = []
+        for (idx_period, _idx_media), rows in master_index.items():
+            if str(idx_period) == str(period):
+                period_candidates.extend(rows)
+        for menu_lower, code in period_candidates:
+            if keyword in menu_lower and code not in seen:
                 seen.add(code)
                 codes.append(code)
         return codes
