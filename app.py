@@ -257,6 +257,20 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 codes.append(code)
         return codes
 
+    # Xはキャンペーン名では照合せず、
+    # 同じテンプレコード（期間）の媒体コードマスタのうち
+    # 「メニュー名」に「カスタム」を含む行をXとして取得する。
+    if media == "X":
+        period_candidates = []
+        for (idx_period, _idx_media), rows in master_index.items():
+            if str(idx_period) == str(period):
+                period_candidates.extend(rows)
+        for menu_lower, code in period_candidates:
+            if "カスタム" in menu_lower and code not in seen:
+                seen.add(code)
+                codes.append(code)
+        return codes
+
     # その他Display媒体は従来ロジックを維持
     parts = [p for p in campaign.split("_") if p]
     for menu_lower, code in candidates:
