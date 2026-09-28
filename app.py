@@ -526,8 +526,12 @@ def to_excel_bytes(backward_out, campaign_df_original, master_original, media_fr
         writer.book.set_calc_mode("auto")
 
         # 媒体コードマスタは出力ブックの先頭（一番左）に配置
-        if progress: progress.progress(0.74, text="Excel：媒体コードマスタを書き出し中…")
-        _write_df_fast(writer, "媒体コードマスタ", master_original)
+        if progress: progress.progress(0.74, text="Excel：媒体コードマスタver3を書き出し中…")
+        _write_df_fast(writer, "媒体コードマスタver3", master_original)
+
+        # 空のコストデータシートを追加
+        cost_ws = writer.book.add_worksheet("コストデータ")
+        writer.sheets["コストデータ"] = cost_ws
 
         if progress: progress.progress(0.76, text="Excel：後方数値データを書き出し中…")
         _write_df_fast(writer, "後方数値データ(加工版)", b_out, null_as_text=True)
