@@ -514,7 +514,7 @@ def to_excel_bytes(backward_out, campaign_df_original, master_original, media_fr
     source_cols = [c for c in backward_out.columns if c not in helper_cols and c != "集計コスト"]
     base_cols = source_cols[:31]  # A:AE
     b_out = backward_out[base_cols].copy()
-    b_out["コスト"] = backward_out["集計コスト"].values  # AF
+    b_out["コスト"] = backward_out["集計コスト"].values / 0.9  # AF: gross（net ÷ 0.9）
 
     with pd.ExcelWriter(
         bio,
