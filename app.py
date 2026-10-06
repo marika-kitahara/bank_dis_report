@@ -271,6 +271,15 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 codes.append(code)
         return codes
 
+    # Metaはキャンペーン名・メニュー名では照合しない。
+    # 同じテンプレコード（期間）かつ媒体コードマスタの「大項目」がMetaの行をすべて取得する。
+    if media == "Meta":
+        for _menu_lower, code in master_index.get((str(period), "Meta"), []):
+            if code not in seen:
+                seen.add(code)
+                codes.append(code)
+        return codes
+
     # その他Display媒体は従来ロジックを維持
     parts = [p for p in campaign.split("_") if p]
     for menu_lower, code in candidates:
