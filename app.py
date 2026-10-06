@@ -296,12 +296,24 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
             return v.casefold()
 
         campaign_cmp = _meta_cmp(campaign_name)
+
+        # Metaは「_Meta_」の次の要素までを照合キーにする。
+        # 例:
+        #   【TG】_SNS_Meta_SP_CV類似_1_...
+        #       → 【TG】_SNS_Meta_SP_CV類似_
+        # 媒体コードマスタ側は _Display_ を _SNS_ に置換してから、
+        # この接頭辞まで一致すれば、以降の訴求・年月・連番は問わず媒体コードを取得する。
+        campaign_parts = campaign_cmp.split("_")
+        meta_pos = next((i for i, p in enumerate(campaign_parts) if p == "meta"), None)
+        if meta_pos is None or meta_pos + 1 >= len(campaign_parts):
+            return []
+
+        # Meta直後の要素まで含めた接頭辞（末尾 "_" 付き）
+        campaign_prefix = "_".join(campaign_parts[:meta_pos + 2]) + "_"
+
         for menu_lower, code in candidates:
-            # 媒体コードマスタ側の「_Display_」は、Metaローデータ側の「_SNS_」として照合する。
-            # それ以外の文字列は完全一致を維持する。
-            menu_cmp = _meta_cmp(menu_lower)
-            menu_cmp = menu_cmp.replace("_display_", "_sns_")
-            if menu_cmp == campaign_cmp and code not in seen:
+            menu_cmp = _meta_cmp(menu_lower).replace("_display_", "_sns_")
+            if menu_cmp.startswith(campaign_prefix) and code not in seen:
                 seen.add(code)
                 codes.append(code)
         return codes
