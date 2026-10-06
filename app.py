@@ -13,11 +13,12 @@ st.title("後方数値分析用 作成")
 st.caption("同じアップロードデータから Display / Search の集計済みExcelをそれぞれ出力します。")
 
 OUTPUT_COLUMNS = ["日", "キャンペーン", "表示回数", "クリック数", "コンバージョン", "通貨コード", "費用"]
-DISPLAY_MEDIA_ORDER = ["YDN", "Pmax", "LINE", "Youtube", "Criteo", "Meta", "X"]
+DISPLAY_MEDIA_ORDER = ["GDN", "YDN", "Pmax", "LINE", "Youtube", "Criteo", "Meta", "X"]
 SEARCH_MEDIA_ORDER = ["GSA", "YSS", "MSA"]
 MASTER_MEDIA_NAME = {"Youtube": "YouTube", "Pmax": "P-MAX"}
 MEDIA_ORDER = DISPLAY_MEDIA_ORDER + SEARCH_MEDIA_ORDER
 DISPLAY_RAW_SHEETS = {
+    "GDN": "【GDN】ローデータ",
     "YDN": "【YDN】ローデータ",
     "Pmax": "【Pmax】ローデータ",
     "LINE": "【LINE】ローデータ",
@@ -35,6 +36,11 @@ SEARCH_RAW_SHEETS = {
 RAW_SHEETS = {**DISPLAY_RAW_SHEETS, **SEARCH_RAW_SHEETS}
 
 COLUMN_MAP = {
+    "GDN": {
+        "日": "日", "キャンペーン": "キャンペーン", "表示回数": "表示回数",
+        "クリック数": "クリック数", "コンバージョン": "コンバージョン",
+        "通貨コード": "通貨コード", "費用": "費用",
+    },
     "YDN": {
         "日": "日", "キャンペーン名": "キャンペーン", "インプレッション数": "表示回数",
         "クリック数": "クリック数", "コンバージョン数": "コンバージョン", "コスト": "費用",
@@ -263,6 +269,21 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
         if not campaign:
             return []
         for menu_lower, code in candidates:
+            if campaign in menu_lower and code not in seen:
+                seen.add(code)
+                codes.append(code)
+        return codes
+
+    # GDNは同じテンプレコード（期間）の媒体コードマスタから、
+    # メニュー名がローデータのキャンペーン名を完全に含む行の媒体コードを取得する。
+    if media == "GDN":
+        if not campaign:
+            return []
+        period_candidates = []
+        for (idx_period, _idx_media), rows in master_index.items():
+            if str(idx_period) == str(period):
+                period_candidates.extend(rows)
+        for menu_lower, code in period_candidates:
             if campaign in menu_lower and code not in seen:
                 seen.add(code)
                 codes.append(code)
