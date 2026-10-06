@@ -297,7 +297,11 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
 
         campaign_cmp = _meta_cmp(campaign_name)
         for menu_lower, code in candidates:
-            if _meta_cmp(menu_lower) == campaign_cmp and code not in seen:
+            # 媒体コードマスタ側の「_Display_」は、Metaローデータ側の「_SNS_」として照合する。
+            # それ以外の文字列は完全一致を維持する。
+            menu_cmp = _meta_cmp(menu_lower)
+            menu_cmp = menu_cmp.replace("_display_", "_sns_")
+            if menu_cmp == campaign_cmp and code not in seen:
                 seen.add(code)
                 codes.append(code)
         return codes
