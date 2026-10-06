@@ -284,17 +284,23 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 codes.append(code)
         return codes
 
-    # Metaは【Facebook】ローデータのキャンペーン名と、
-    # 同じ期間・大項目Metaの媒体コードマスタ「メニュー名」を照合する。
-    # Metaのキャンペーン名は区切り文字を固定せず、メニュー名全体がキャンペーン名に
-    # 含まれる（または逆にキャンペーン名がメニュー名に含まれる）場合を一致とする。
+    # Metaは【Facebook】ローデータのキャンペーン名から、
+    # 先頭要素・「Meta」・Meta直後の要素を照合キーにする。
+    # 例: 【TG】_Display_Meta_興味関心層向け_1_...
+    #   -> 【TG】 / Meta / 興味関心層向け
+    # 同じ期間・大項目Metaのメニュー名に、この3要素がすべて含まれれば一致。
+    # Display/SNSなどMetaより前の媒体表現や、Meta以降の訴求・年月・連番は無視する。
     if media == "Meta":
-        campaign_cmp = re.sub(r"\s+", "", campaign)
-        if not campaign_cmp:
+        parts = [p.strip() for p in campaign.split("_") if p.strip()]
+        meta_pos = next((i for i, p in enumerate(parts) if p.lower() == "meta"), None)
+        if meta_pos is None or meta_pos + 1 >= len(parts):
             return []
+
+        keys = [parts[0], "meta", parts[meta_pos + 1]]
+        keys_cmp = [re.sub(r"\s+", "", k.lower()) for k in keys if k]
         for menu_lower, code in candidates:
-            menu_cmp = re.sub(r"\s+", "", menu_lower)
-            if menu_cmp and (menu_cmp in campaign_cmp or campaign_cmp in menu_cmp) and code not in seen:
+            menu_cmp = re.sub(r"\s+", "", menu_lower.lower())
+            if all(k in menu_cmp for k in keys_cmp) and code not in seen:
                 seen.add(code)
                 codes.append(code)
         return codes
