@@ -285,13 +285,10 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 codes.append(code)
         return codes
 
-    # Metaはまずキャンペーン名とメニュー名の完全一致を最優先する。
-    # 完全一致が1件以上あれば、その媒体コードだけを返し、部分一致は行わない。
-    # 完全一致がない場合のみ、表記差（Display/SNS）や後半の訴求・年月・連番を吸収するため、
-    # 先頭要素・「Meta」・Meta直後の要素による部分一致へフォールバックする。
+    # Metaは同一期間・大項目=Metaの候補のうち、
+    # キャンペーン名とメニュー名が完全一致する行の媒体コードだけを取得する。
+    # 完全一致がなければ「該当なし」。部分一致へのフォールバックは行わない。
     if media == "Meta":
-        # Metaの完全一致は、Excel由来の不可視文字・全角/半角・空白差を吸収して比較する。
-        # 見た目が同じキャンペーン名/メニュー名なら同一とみなす。
         def _meta_cmp(v):
             v = unicodedata.normalize("NFKC", normalize_text(v))
             v = v.replace("\u200b", "").replace("\ufeff", "")
@@ -299,28 +296,8 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
             return v.casefold()
 
         campaign_cmp = _meta_cmp(campaign_name)
-
-        # 完全一致するメニュー名が存在する場合、そのメニュー名の行だけを採用。
-        # 同一メニュー名に媒体コードが30件あれば30件すべて返す。
-        exact_codes = []
-        exact_seen = set()
         for menu_lower, code in candidates:
-            if _meta_cmp(menu_lower) == campaign_cmp and code not in exact_seen:
-                exact_seen.add(code)
-                exact_codes.append(code)
-        if exact_codes:
-            return exact_codes
-
-        parts = [p.strip() for p in campaign.split("_") if p.strip()]
-        meta_pos = next((i for i, p in enumerate(parts) if p.lower() == "meta"), None)
-        if meta_pos is None or meta_pos + 1 >= len(parts):
-            return []
-
-        keys = [parts[0], "meta", parts[meta_pos + 1]]
-        keys_cmp = [re.sub(r"\s+", "", k.lower()) for k in keys if k]
-        for menu_lower, code in candidates:
-            menu_cmp = re.sub(r"\s+", "", menu_lower.lower())
-            if all(k in menu_cmp for k in keys_cmp) and code not in seen:
+            if _meta_cmp(menu_lower) == campaign_cmp and code not in seen:
                 seen.add(code)
                 codes.append(code)
         return codes
