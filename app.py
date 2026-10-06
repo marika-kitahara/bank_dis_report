@@ -1,6 +1,7 @@
 import io
 import re
 import time
+import unicodedata
 from collections import defaultdict
 
 import numpy as np
@@ -289,13 +290,22 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
     # 完全一致がない場合のみ、表記差（Display/SNS）や後半の訴求・年月・連番を吸収するため、
     # 先頭要素・「Meta」・Meta直後の要素による部分一致へフォールバックする。
     if media == "Meta":
-        campaign_cmp = re.sub(r"\s+", "", campaign.lower())
+        # Metaの完全一致は、Excel由来の不可視文字・全角/半角・空白差を吸収して比較する。
+        # 見た目が同じキャンペーン名/メニュー名なら同一とみなす。
+        def _meta_cmp(v):
+            v = unicodedata.normalize("NFKC", normalize_text(v))
+            v = v.replace("\u200b", "").replace("\ufeff", "")
+            v = re.sub(r"\s+", "", v)
+            return v.casefold()
 
+        campaign_cmp = _meta_cmp(campaign_name)
+
+        # 完全一致するメニュー名が存在する場合、そのメニュー名の行だけを採用。
+        # 同一メニュー名に媒体コードが30件あれば30件すべて返す。
         exact_codes = []
         exact_seen = set()
         for menu_lower, code in candidates:
-            menu_cmp = re.sub(r"\s+", "", menu_lower.lower())
-            if menu_cmp == campaign_cmp and code not in exact_seen:
+            if _meta_cmp(menu_lower) == campaign_cmp and code not in exact_seen:
                 exact_seen.add(code)
                 exact_codes.append(code)
         if exact_codes:
