@@ -308,8 +308,12 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
         if meta_pos is None or meta_pos + 1 >= len(campaign_parts):
             return []
 
-        # Meta直後の要素まで含めた接頭辞（末尾 "_" 付き）
-        campaign_prefix = "_".join(campaign_parts[:meta_pos + 2]) + "_"
+        # Metaの後ろ2要素まで含めた接頭辞（末尾 "_" 付き）
+        # 例: ..._Meta_SP_CV類似_...
+        #     → ..._Meta_SP_CV類似_
+        if meta_pos + 2 >= len(campaign_parts):
+            return []
+        campaign_prefix = "_".join(campaign_parts[:meta_pos + 3]) + "_"
 
         for menu_lower, code in candidates:
             menu_cmp = _meta_cmp(menu_lower).replace("_display_", "_sns_")
