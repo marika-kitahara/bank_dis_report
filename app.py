@@ -284,13 +284,23 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 codes.append(code)
         return codes
 
-    # Metaは【Facebook】ローデータのキャンペーン名から、
-    # 先頭要素・「Meta」・Meta直後の要素を照合キーにする。
-    # 例: 【TG】_Display_Meta_興味関心層向け_1_...
-    #   -> 【TG】 / Meta / 興味関心層向け
-    # 同じ期間・大項目Metaのメニュー名に、この3要素がすべて含まれれば一致。
-    # Display/SNSなどMetaより前の媒体表現や、Meta以降の訴求・年月・連番は無視する。
+    # Metaはまずキャンペーン名とメニュー名の完全一致を最優先する。
+    # 完全一致が1件以上あれば、その媒体コードだけを返し、部分一致は行わない。
+    # 完全一致がない場合のみ、表記差（Display/SNS）や後半の訴求・年月・連番を吸収するため、
+    # 先頭要素・「Meta」・Meta直後の要素による部分一致へフォールバックする。
     if media == "Meta":
+        campaign_cmp = re.sub(r"\s+", "", campaign.lower())
+
+        exact_codes = []
+        exact_seen = set()
+        for menu_lower, code in candidates:
+            menu_cmp = re.sub(r"\s+", "", menu_lower.lower())
+            if menu_cmp == campaign_cmp and code not in exact_seen:
+                exact_seen.add(code)
+                exact_codes.append(code)
+        if exact_codes:
+            return exact_codes
+
         parts = [p.strip() for p in campaign.split("_") if p.strip()]
         meta_pos = next((i for i, p in enumerate(parts) if p.lower() == "meta"), None)
         if meta_pos is None or meta_pos + 1 >= len(parts):
