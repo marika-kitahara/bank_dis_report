@@ -116,7 +116,34 @@ def find_first_sheet(file_obj, candidates):
 
 
 def coerce_date(s):
-    return pd.to_datetime(s, errors="coerce").dt.normalize()
+    """文字列/Excel日付/Unix timestampが混在しても日付として正しく解釈する。"""
+    if s is None:
+        return pd.Series(dtype="datetime64[ns]")
+
+    def _one(v):
+        if pd.isna(v) or str(v).strip() == "":
+            return pd.NaT
+        # 数値は桁で判定。Meta等でUnix timestampが来ても1970年化させない。
+        if isinstance(v, (int, float, np.integer, np.floating)) and not isinstance(v, bool):
+            n = float(v)
+            a = abs(n)
+            try:
+                if a >= 1e17:   # nanoseconds
+                    return pd.to_datetime(n, unit="ns", errors="coerce").normalize()
+                if a >= 1e14:   # microseconds
+                    return pd.to_datetime(n, unit="us", errors="coerce").normalize()
+                if a >= 1e11:   # milliseconds
+                    return pd.to_datetime(n, unit="ms", errors="coerce").normalize()
+                if a >= 1e9:    # seconds
+                    return pd.to_datetime(n, unit="s", errors="coerce").normalize()
+                # Excel serial date
+                if 20000 <= a <= 80000:
+                    return pd.to_datetime(n, unit="D", origin="1899-12-30", errors="coerce").normalize()
+            except Exception:
+                pass
+        return pd.to_datetime(v, errors="coerce").normalize()
+
+    return s.map(_one)
 
 
 def coerce_num(s):
@@ -253,6 +280,21 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 period_candidates.extend(rows)
         for menu_lower, code in period_candidates:
             if keyword in menu_lower and code not in seen:
+                seen.add(code)
+                codes.append(code)
+        return codes
+
+    # Metaは【Facebook】ローデータのキャンペーン名と、
+    # 同じ期間・大項目Metaの媒体コードマスタ「メニュー名」を照合する。
+    # Metaのキャンペーン名は区切り文字を固定せず、メニュー名全体がキャンペーン名に
+    # 含まれる（または逆にキャンペーン名がメニュー名に含まれる）場合を一致とする。
+    if media == "Meta":
+        campaign_cmp = re.sub(r"\s+", "", campaign)
+        if not campaign_cmp:
+            return []
+        for menu_lower, code in candidates:
+            menu_cmp = re.sub(r"\s+", "", menu_lower)
+            if menu_cmp and (menu_cmp in campaign_cmp or campaign_cmp in menu_cmp) and code not in seen:
                 seen.add(code)
                 codes.append(code)
         return codes
