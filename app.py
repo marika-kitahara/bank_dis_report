@@ -368,43 +368,36 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
 
 def add_matching_columns_fast(df, media, campaign_date_map, master_index, backward_index):
     x = df.copy()
-    media_total, day_counts, codes_by_media_day, _ = backward_index
+    _, _, codes_by_media_day, _ = backward_index
 
     periods = [campaign_date_map.get(pd.Timestamp(dt).normalize(), "") for dt in x["日"]]
-    codes_list = [
-        media_codes_for_row_fast(cn, p, media, master_index)
-        for cn, p in zip(x["キャンペーン"], periods)
-    ]
-    # 完成版Search Excelに合わせ、MSAは媒体コードのみを「、」区切りで出力。
-    # GSA/YSSおよびDisplay媒体は「n種類 (code...)」形式。
+    codes_list = [media_codes_for_row_fast(cn, p, media, master_index)
+                  for cn, p in zip(x["キャンペーン"], periods)]
+
     if media == "MSA":
         code_texts = ["該当なし" if not cs else "、".join(cs) for cs in codes_list]
     else:
         code_texts = ["該当なし" if not cs else f"{len(cs)}種類 ({'、'.join(cs)})" for cs in codes_list]
-    code_texts_lower = [t.lower() for t in code_texts]
 
     x["期間"] = periods
     x["媒体コード"] = code_texts
     x["種類数"] = [len(cs) for cs in codes_list]
-    x["転記用コスト(net)"] = np.where(x["種類数"].to_numpy() > 0, x["費用"].to_numpy() / x["種類数"].replace(0, np.nan).to_numpy(), np.nan)
+    x["転記用コスト(net)"] = np.where(
+        x["種類数"].to_numpy() > 0,
+        x["費用"].to_numpy() / x["種類数"].replace(0, np.nan).to_numpy(),
+        np.nan,
+    )
     x["転記用コスト(gross)"] = x["転記用コスト(net)"] / 0.9
     x[media] = ""
 
-    total_count = int(media_total.get(media, 0))
-    match_counts = []
-    date_counts = []
-    alloc_units = []
-    for dt, code_text_lower, cost in zip(x["日"], code_texts_lower, x["費用"]):
-        key = (media, dt)
-        day_count = int(day_counts.get(key, 0))
-        if code_text_lower != "該当なし":
-            count = sum(1 for c in codes_by_media_day.get(key, []) if c and c.lower() in code_text_lower)
-        else:
-            count = 0
-        denom = count if count > 0 else (day_count if day_count > 0 else total_count)
+    match_counts, date_counts, alloc_units = [], [], []
+    for dt, codes, cost in zip(x["日"], codes_list, x["費用"]):
+        day_codes = codes_by_media_day.get((media, dt), [])
+        code_set = {str(c).lower() for c in codes if c}
+        count = sum(1 for c in day_codes if c and str(c).lower() in code_set)
         match_counts.append(count)
-        date_counts.append(day_count)
-        alloc_units.append(float(cost) / denom if denom else 0.0)
+        date_counts.append(len(day_codes))
+        alloc_units.append(float(cost) / count if count > 0 else float(cost))
 
     x.insert(7, "媒体一致件数", match_counts)
     x.insert(8, "日付件数", date_counts)
@@ -413,7 +406,7 @@ def add_matching_columns_fast(df, media, campaign_date_map, master_index, backwa
 
 
 def calculate_backward_cost_fast(backward, media_frames, backward_index):
-    """媒体ローデータ×後方データの全件二重ループをやめ、必要な対象行だけに加算。"""
+    """同日同一コード優先。なければ1日/25日を起点に同一コードの別日付へ振替。"""
     result = backward.copy()
     costs = np.zeros(len(result), dtype=float)
     _, _, _, rows_by_media = backward_index
@@ -423,31 +416,67 @@ def calculate_backward_cost_fast(backward, media_frames, backward_index):
         if not target_rows or df.empty:
             continue
 
-        all_indices = [idx for idx, _, _ in target_rows]
-        indices_by_day = defaultdict(list)
         code_rows_by_day = defaultdict(list)
+        dates_by_code = defaultdict(list)
         for idx, dt, code in target_rows:
-            indices_by_day[dt].append(idx)
-            code_rows_by_day[dt].append((idx, code.lower() if code else ""))
+            code_lower = code.lower() if code else ""
+            code_rows_by_day[(dt, code_lower)].append(idx)
+            if code_lower:
+                dates_by_code[code_lower].append((dt, idx))
 
-        for r in df[["日", "媒体一致件数", "日付件数", "按分単価", "媒体コード"]].itertuples(index=False, name=None):
-            dt, match_count, day_count, unit, code_text = r
-            unit = 0.0 if pd.isna(unit) else float(unit)
-            match_count = int(match_count or 0)
-            day_count = int(day_count or 0)
+        for code_lower in dates_by_code:
+            dates_by_code[code_lower].sort(key=lambda z: (z[0], z[1]))
 
-            if match_count > 0:
-                code_text_lower = str(code_text).lower()
-                for idx, code_lower in code_rows_by_day.get(dt, []):
-                    if code_lower and code_lower in code_text_lower:
-                        costs[idx] += unit
-            elif day_count > 0:
-                for idx in indices_by_day.get(dt, []):
-                    costs[idx] += unit
+        for dt, raw_cost, code_text, kind_count in df[
+            ["日", "費用", "媒体コード", "種類数"]
+        ].itertuples(index=False, name=None):
+            dt = pd.Timestamp(dt).normalize()
+            raw_cost = 0.0 if pd.isna(raw_cost) else float(raw_cost)
+            code_text = str(code_text)
+
+            if code_text.lower() == "該当なし" or not int(kind_count or 0):
+                continue
+
+            if media == "MSA":
+                codes = [c.strip() for c in code_text.split("、") if c.strip()]
             else:
-                # 元式の「媒体一致件数=0 かつ 日付件数=0」は媒体内の全行へ配賦
-                for idx in all_indices:
-                    costs[idx] += unit
+                inside = code_text.split("(", 1)[1].rsplit(")", 1)[0] if "(" in code_text and ")" in code_text else ""
+                codes = [c.strip() for c in inside.split("、") if c.strip()]
+
+            if not codes:
+                continue
+
+            cost_per_code = raw_cost / len(codes)
+
+            for code in codes:
+                code_lower = code.lower()
+
+                # ① 同日・同一媒体コードがあれば従来どおり均等配賦
+                same_day_rows = code_rows_by_day.get((dt, code_lower), [])
+                if same_day_rows:
+                    unit = cost_per_code / len(same_day_rows)
+                    for idx in same_day_rows:
+                        costs[idx] += unit
+                    continue
+
+                # ②③ 1～24日→1日、25日以降→25日を起点に同一媒体コードを探す
+                anchor_day = 1 if dt.day <= 24 else 25
+                anchor = pd.Timestamp(year=dt.year, month=dt.month, day=anchor_day)
+
+                if anchor_day == 1:
+                    candidates = [(row_dt, idx) for row_dt, idx in dates_by_code.get(code_lower, [])
+                                  if row_dt.year == dt.year and row_dt.month == dt.month
+                                  and 1 <= row_dt.day <= 24 and row_dt >= anchor]
+                else:
+                    candidates = [(row_dt, idx) for row_dt, idx in dates_by_code.get(code_lower, [])
+                                  if row_dt.year == dt.year and row_dt.month == dt.month
+                                  and row_dt.day >= 25 and row_dt >= anchor]
+
+                if candidates:
+                    # 1→2→3… / 25→26→27… の順で最初の1行だけへ加算
+                    _, idx = min(candidates, key=lambda z: (z[0], z[1]))
+                    costs[idx] += cost_per_code
+                # 見つからない場合は別キャンペーンへ流さない
 
     result["集計コスト"] = costs
     return result
