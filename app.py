@@ -411,9 +411,12 @@ def calculate_backward_cost_fast(backward, media_frames, backward_index):
     costs = np.zeros(len(result), dtype=float)
     _, _, _, rows_by_media = backward_index
 
+    added_rows = {}  # (media, date, code) -> new row index
+    new_rows = []
+    new_costs = defaultdict(float)
     for media, df in media_frames.items():
         target_rows = rows_by_media.get(media, [])
-        if not target_rows or df.empty:
+        if df.empty:
             continue
 
         code_rows_by_day = defaultdict(list)
@@ -476,9 +479,28 @@ def calculate_backward_cost_fast(backward, media_frames, backward_index):
                     # 1→2→3… / 25→26→27… の順で最初の1行だけへ加算
                     _, idx = min(candidates, key=lambda z: (z[0], z[1]))
                     costs[idx] += cost_per_code
-                # 見つからない場合は別キャンペーンへ流さない
+                else:
+                    # 転記先が存在しなければ、1日/25日付で補完行を1行作る。
+                    # 同じ媒体・日付・媒体コードの不足分は同一行へまとめる。
+                    key = (media, anchor, code_lower)
+                    if key not in added_rows:
+                        added_rows[key] = len(result) + len(new_rows)
+                        new_row = {col: np.nan for col in result.columns}
+                        source_cols = [c for c in result.columns if not c.startswith("__") and c != "集計コスト"]
+                        new_row[source_cols[1]] = anchor  # B
+                        new_row[source_cols[2]] = code    # C
+                        new_row[source_cols[30]] = media  # AE
+                        new_row["__date"] = anchor
+                        new_row["__code"] = code
+                        new_row["__media"] = media
+                        new_rows.append(new_row)
+                    new_costs[key] += cost_per_code
 
     result["集計コスト"] = costs
+    if new_rows:
+        extra = pd.DataFrame(new_rows, columns=result.columns)
+        extra["集計コスト"] = [new_costs[(row["__media"], row["__date"], row["__code"].lower())] for row in new_rows]
+        result = pd.concat([result, extra], ignore_index=True)
     return result
 
 
