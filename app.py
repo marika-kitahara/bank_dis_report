@@ -635,7 +635,7 @@ def _write_cost_diff_sheet(writer, media_order):
         ws.write(2, j, m, hair_text_fmt)
         ws.write_formula(3, j, f'=SUMIF(\'後方数値データ(加工版)\'!$AE:$AE,{letters}$3,\'後方数値データ(加工版)\'!$AF:$AF)', hair_fmt)
         cost_col = 'G' if m in DISPLAY_MEDIA_ORDER or m == 'GSA' else 'F'
-        ws.write_formula(4, j, f'=SUM(\'{m}\'!{cost_col}:{cost_col})', hair_fmt)
+        ws.write_formula(4, j, f'=SUM(\'{m}\'!{cost_col}:{cost_col})/0.9', hair_fmt)
         ws.write_formula(5, j, f'={letters}4-{letters}5', num_fmt)
 
     ws.write("B4", "後方数値", text_fmt)
