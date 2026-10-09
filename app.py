@@ -274,20 +274,47 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 codes.append(code)
         return codes
 
-    # GDNは同じテンプレコード（期間）の媒体コードマスタから、
-    # メニュー名がローデータのキャンペーン名を完全に含む行の媒体コードを取得する。
+    # GDN: まず従来の完全包含、なければ掲載面の固有キーで照合。
     if media == "GDN":
-        if not campaign:
-            return []
-        period_candidates = []
-        for (idx_period, _idx_media), rows in master_index.items():
-            if str(idx_period) == str(period):
-                period_candidates.extend(rows)
-        for menu_lower, code in period_candidates:
-            if campaign in menu_lower and code not in seen:
-                seen.add(code)
-                codes.append(code)
-        return codes
+        period_candidates = [item for (per, _), rows in master_index.items()
+                             if str(per) == str(period) for item in rows]
+        direct = [(menu, code) for menu, code in period_candidates if campaign and campaign in menu]
+        if direct:
+            return list(dict.fromkeys(code for _, code in direct))
+        # 例: ジモティ[in_bank_7] ジモティ面 → ジモティ[in_bank_7]
+        identifiers = re.findall(r"[^_\s]+\[in_bank_\d+\]", campaign, flags=re.I)
+        matches = [(menu, code) for menu, code in period_candidates
+                   if "gdn" in menu and any(token in menu for token in identifiers)]
+        return list(dict.fromkeys(code for _, code in matches))
+
+    # YDN: 従来の完全一致を優先。該当なしの場合のみ掲載面＋bank識別子で照合。
+    if media == "YDN":
+        direct = [(menu, code) for menu, code in candidates if campaign and campaign in menu]
+        if direct:
+            return list(dict.fromkeys(code for _, code in direct))
+        def ydn_key(value):
+            value = unicodedata.normalize("NFKC", value).casefold()
+            value = re.sub(r"^【sep】", "", value)
+            bank = re.search(r"\[in_bank_\d+\]", value)
+            if not bank:
+                return None
+            # AT/RTや年月は一致必須としない。掲載面は表記揺れを吸収。
+            prefix = value[:bank.start()]
+            if "lineニュース" in prefix:
+                placement = "lineニュース"
+            elif "yahoo!ニュース" in prefix:
+                placement = "yahoo!ニュース"
+            elif "direct" in prefix:
+                placement = "direct"
+            else:
+                return None
+            return (placement, bank.group())
+        key = ydn_key(campaign)
+        if key:
+            matches = [(menu, code) for menu, code in candidates
+                       if "ydn" in menu and ydn_key(menu) == key]
+            return list(dict.fromkeys(code for _, code in matches))
+        return []
 
     # DisplayのYoutube / Pmaxは大項目では判定しない。
     # 媒体コードマスタの「メニュー名」に、媒体ごとの検索語
@@ -306,42 +333,37 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 codes.append(code)
         return codes
 
-    # Metaは同一期間・大項目=Metaの候補のうち、
-    # キャンペーン名とメニュー名が完全一致する行の媒体コードだけを取得する。
-    # 完全一致がなければ「該当なし」。部分一致へのフォールバックは行わない。
+    # Meta: 既存の接頭辞一致を優先。末尾トークン不足・Facebook表記差を補完。
     if media == "Meta":
-        def _meta_cmp(v):
+        def norm(v):
             v = unicodedata.normalize("NFKC", normalize_text(v))
-            v = v.replace("\u200b", "").replace("\ufeff", "")
-            v = re.sub(r"\s+", "", v)
-            return v.casefold()
-
-        campaign_cmp = _meta_cmp(campaign_name)
-
-        # Metaは「_Meta_」の次の要素までを照合キーにする。
-        # 例:
-        #   【TG】_SNS_Meta_SP_CV類似_1_...
-        #       → 【TG】_SNS_Meta_SP_CV類似_
-        # 媒体コードマスタ側は _Display_ を _SNS_ に置換してから、
-        # この接頭辞まで一致すれば、以降の訴求・年月・連番は問わず媒体コードを取得する。
-        campaign_parts = campaign_cmp.split("_")
-        meta_pos = next((i for i, p in enumerate(campaign_parts) if p == "meta"), None)
-        if meta_pos is None or meta_pos + 1 >= len(campaign_parts):
+            v = re.sub(r"[\s\u200b\ufeff]+", "", v)
+            return v.casefold().replace("_display_", "_sns_")
+        cmp = norm(campaign_name)
+        parts = cmp.split("_")
+        pos = next((i for i, part in enumerate(parts) if part == "meta"), None)
+        if pos is None or pos + 1 >= len(parts):
             return []
-
-        # Metaの後ろ2要素まで含めた接頭辞（末尾 "_" 付き）
-        # 例: ..._Meta_SP_CV類似_...
-        #     → ..._Meta_SP_CV類似_
-        if meta_pos + 2 >= len(campaign_parts):
-            return []
-        campaign_prefix = "_".join(campaign_parts[:meta_pos + 3]) + "_"
-
-        for menu_lower, code in candidates:
-            menu_cmp = _meta_cmp(menu_lower).replace("_display_", "_sns_")
-            if menu_cmp.startswith(campaign_prefix) and code not in seen:
-                seen.add(code)
-                codes.append(code)
-        return codes
+        # 最初に元の「Metaの後ろ2要素まで」一致を維持。
+        if pos + 2 < len(parts):
+            prefix = "_".join(parts[:pos + 3])
+            direct = [(menu, code) for menu, code in candidates
+                      if norm(menu).startswith(prefix + "_") or norm(menu) == prefix]
+            if direct:
+                return list(dict.fromkeys(code for _, code in direct))
+        # 例: 興味関心層向け / 中高年層向け は1要素でメニュー名が終わる。
+        # Facebook_SP_男性_18-65_ASC は Facebook/SP/男性/年齢/ASC まで比較。
+        marker = parts[pos + 1]
+        if marker == "facebook":
+            key = "_".join(parts[pos + 1:pos + 6])
+            matches = [(menu, code) for menu, code in candidates
+                       if "_meta_" in norm(menu) and norm(menu).split("_meta_", 1)[1].startswith(key)]
+        else:
+            matches = [(menu, code) for menu, code in candidates
+                       if "_meta_" in norm(menu) and
+                       (norm(menu).split("_meta_", 1)[1] == marker or
+                        norm(menu).split("_meta_", 1)[1].startswith(marker + "_"))]
+        return list(dict.fromkeys(code for _, code in matches))
 
     # Xはキャンペーン名では照合せず、
     # 同じテンプレコード（期間）の媒体コードマスタのうち
