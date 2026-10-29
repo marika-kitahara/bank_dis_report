@@ -85,16 +85,13 @@ COLUMN_MAP = {
     },
 }
 
-
 def clean_col(v):
     return str(v).replace("\u3000", " ").strip() if v is not None else ""
-
 
 def normalize_text(v):
     if pd.isna(v):
         return ""
     return str(v).strip()
-
 
 def read_sheet(file_obj, sheet_name):
     """存在しない/空のシートはNone。候補リストなら最初に存在するシートを読む。"""
@@ -110,7 +107,6 @@ def read_sheet(file_obj, sheet_name):
         return None
     return df.dropna(how="all").reset_index(drop=True)
 
-
 def find_first_sheet(file_obj, candidates):
     file_obj.seek(0)
     xls = pd.ExcelFile(file_obj, engine="openpyxl")
@@ -121,7 +117,6 @@ def find_first_sheet(file_obj, candidates):
             return df.dropna(how="all").reset_index(drop=True)
     return None
 
-
 def coerce_date(s):
     """文字列/Excel日付/Unix timestampが混在しても日付として正しく解釈する。"""
     if s is None:
@@ -130,7 +125,6 @@ def coerce_date(s):
     def _one(v):
         if pd.isna(v) or str(v).strip() == "":
             return pd.NaT
-        # 数値は桁で判定。Meta等でUnix timestampが来ても1970年化させない。
         if isinstance(v, (int, float, np.integer, np.floating)) and not isinstance(v, bool):
             n = float(v)
             a = abs(n)
@@ -143,7 +137,6 @@ def coerce_date(s):
                     return pd.to_datetime(n, unit="ms", errors="coerce").normalize()
                 if a >= 1e9:    # seconds
                     return pd.to_datetime(n, unit="s", errors="coerce").normalize()
-                # Excel serial date
                 if 20000 <= a <= 80000:
                     return pd.to_datetime(n, unit="D", origin="1899-12-30", errors="coerce").normalize()
             except Exception:
@@ -151,7 +144,6 @@ def coerce_date(s):
         return pd.to_datetime(v, errors="coerce").normalize()
 
     return s.map(_one)
-
 
 def coerce_num(s):
     if s is None:
@@ -167,7 +159,6 @@ def coerce_num(s):
 def standardize_media(df, media):
     mapping = COLUMN_MAP[media]
     missing = [c for c in mapping if c not in df.columns]
-    # Youtube/Criteoは仕様上、通貨コード列が空見出しの可能性があるため要求しない
     if missing:
         raise ValueError(f"{media}: 必要列が見つかりません → {', '.join(missing)}")
 
@@ -199,7 +190,6 @@ def prepare_campaign(df):
     x["終了日"] = coerce_date(x["終了日"])
     return x
 
-
 def prepare_media_master(df):
     required = ["テンプレコード", "大項目", "メニュー名", "媒体コード"]
     missing = [c for c in required if c not in df.columns]
@@ -209,7 +199,6 @@ def prepare_media_master(df):
     for c in required:
         x[c] = x[c].map(normalize_text)
     return x
-
 
 def build_campaign_date_map(campaign_df):
     """日付→テンプレコードを一度だけ作る。重複日は元仕様どおり先頭行を優先。"""
@@ -222,7 +211,6 @@ def build_campaign_date_map(campaign_df):
         for dt in pd.date_range(getattr(row, "開始日"), getattr(row, "終了日"), freq="D"):
             date_map.setdefault(pd.Timestamp(dt).normalize(), code)
     return date_map
-
 
 def build_master_index(master):
     """(テンプレコード, 大項目)→[(メニュー名小文字, 媒体コード)] に索引化。"""
@@ -237,7 +225,6 @@ def build_master_index(master):
             index[(period, media)].append((menu.lower(), code))
     return index
 
-
 def build_backward_index(backward):
     """後方数値を媒体・日付単位で索引化。"""
     valid = backward[(backward["__media"] != "") & backward["__date"].notna()].copy()
@@ -249,7 +236,6 @@ def build_backward_index(backward):
         rows_by_media[media].append((idx, dt, code))
     return media_total, day_counts, codes_by_media_day, rows_by_media
 
-
 def media_codes_for_row_fast(campaign_name, period, media, master_index):
     if not period:
         return []
@@ -260,9 +246,6 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
     seen = set()
     codes = []
 
-    # Search媒体は完成ExcelのPower Queryと同じく、
-    # ローデータのキャンペーン名そのものが媒体コードマスタの「メニュー名」に
-    # 含まれるかで判定する。MSAだけ先頭の【SEP】を除いて照合する。
     if media in SEARCH_MEDIA_ORDER:
         if media == "MSA":
             campaign = re.sub(r"^【sep】", "", campaign, flags=re.IGNORECASE).strip()
@@ -274,20 +257,17 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 codes.append(code)
         return codes
 
-    # GDN: まず従来の完全包含、なければ掲載面の固有キーで照合。
     if media == "GDN":
         period_candidates = [item for (per, _), rows in master_index.items()
                              if str(per) == str(period) for item in rows]
         direct = [(menu, code) for menu, code in period_candidates if campaign and campaign in menu]
         if direct:
             return list(dict.fromkeys(code for _, code in direct))
-        # 例: ジモティ[in_bank_7] ジモティ面 → ジモティ[in_bank_7]
         identifiers = re.findall(r"[^_\s]+\[in_bank_\d+\]", campaign, flags=re.I)
         matches = [(menu, code) for menu, code in period_candidates
                    if "gdn" in menu and any(token in menu for token in identifiers)]
         return list(dict.fromkeys(code for _, code in matches))
 
-    # YDN: 従来の完全一致を優先。該当なしの場合のみ掲載面＋bank識別子で照合。
     if media == "YDN":
         direct = [(menu, code) for menu, code in candidates if campaign and campaign in menu]
         if direct:
@@ -298,7 +278,6 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
             bank = re.search(r"\[in_bank_\d+\]", value)
             if not bank:
                 return None
-            # AT/RTや年月は一致必須としない。掲載面は表記揺れを吸収。
             prefix = value[:bank.start()]
             if "lineニュース" in prefix:
                 placement = "lineニュース"
@@ -316,11 +295,6 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
             return list(dict.fromkeys(code for _, code in matches))
         return []
 
-    # DisplayのYoutube / Pmaxは大項目では判定しない。
-    # 媒体コードマスタの「メニュー名」に、媒体ごとの検索語
-    #   Youtube -> YouTube
-    #   Pmax    -> P-MAX
-    # が含まれる行を、同じテンプレコード（期間）の中から取得する。
     if media in ("Youtube", "Pmax"):
         keyword = "youtube" if media == "Youtube" else "p-max"
         period_candidates = []
@@ -333,7 +307,6 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 codes.append(code)
         return codes
 
-    # Meta: 既存の接頭辞一致を優先。末尾トークン不足・Facebook表記差を補完。
     if media == "Meta":
         def norm(v):
             v = unicodedata.normalize("NFKC", normalize_text(v))
@@ -344,15 +317,12 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
         pos = next((i for i, part in enumerate(parts) if part == "meta"), None)
         if pos is None or pos + 1 >= len(parts):
             return []
-        # 最初に元の「Metaの後ろ2要素まで」一致を維持。
         if pos + 2 < len(parts):
             prefix = "_".join(parts[:pos + 3])
             direct = [(menu, code) for menu, code in candidates
                       if norm(menu).startswith(prefix + "_") or norm(menu) == prefix]
             if direct:
                 return list(dict.fromkeys(code for _, code in direct))
-        # 例: 興味関心層向け / 中高年層向け は1要素でメニュー名が終わる。
-        # Facebook_SP_男性_18-65_ASC は Facebook/SP/男性/年齢/ASC まで比較。
         marker = parts[pos + 1]
         if marker == "facebook":
             key = "_".join(parts[pos + 1:pos + 6])
@@ -365,9 +335,6 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                         norm(menu).split("_meta_", 1)[1].startswith(marker + "_"))]
         return list(dict.fromkeys(code for _, code in matches))
 
-    # Xはキャンペーン名では照合せず、
-    # 同じテンプレコード（期間）の媒体コードマスタのうち
-    # 「メニュー名」に「カスタム」を含む行をXとして取得する。
     if media == "X":
         period_candidates = []
         for (idx_period, _idx_media), rows in master_index.items():
@@ -379,7 +346,6 @@ def media_codes_for_row_fast(campaign_name, period, media, master_index):
                 codes.append(code)
         return codes
 
-    # その他Display媒体は従来ロジックを維持
     parts = [p for p in campaign.split("_") if p]
     for menu_lower, code in candidates:
         if (not parts or all(p in menu_lower for p in parts)) and code not in seen:
@@ -425,7 +391,6 @@ def add_matching_columns_fast(df, media, campaign_date_map, master_index, backwa
     x.insert(8, "日付件数", date_counts)
     x.insert(9, "按分単価", alloc_units)
     return x
-
 
 def calculate_backward_cost_fast(backward, media_frames, backward_index):
     """同日同一コード優先。なければ1日/25日を起点に同一コードの別日付へ振替。"""
@@ -476,7 +441,6 @@ def calculate_backward_cost_fast(backward, media_frames, backward_index):
             for code in codes:
                 code_lower = code.lower()
 
-                # ① 同日・同一媒体コードがあれば従来どおり均等配賦
                 same_day_rows = code_rows_by_day.get((dt, code_lower), [])
                 if same_day_rows:
                     unit = cost_per_code / len(same_day_rows)
@@ -484,7 +448,6 @@ def calculate_backward_cost_fast(backward, media_frames, backward_index):
                         costs[idx] += unit
                     continue
 
-                # ②③ 1～24日→1日、25日以降→25日を起点に同一媒体コードを探す
                 anchor_day = 1 if dt.day <= 24 else 25
                 anchor = pd.Timestamp(year=dt.year, month=dt.month, day=anchor_day)
 
@@ -498,12 +461,9 @@ def calculate_backward_cost_fast(backward, media_frames, backward_index):
                                   and row_dt.day >= 25 and row_dt >= anchor]
 
                 if candidates:
-                    # 1→2→3… / 25→26→27… の順で最初の1行だけへ加算
                     _, idx = min(candidates, key=lambda z: (z[0], z[1]))
                     costs[idx] += cost_per_code
                 else:
-                    # 転記先が存在しなければ、1日/25日付で補完行を1行作る。
-                    # 同じ媒体・日付・媒体コードの不足分は同一行へまとめる。
                     key = (media, anchor, code_lower)
                     if key not in added_rows:
                         added_rows[key] = len(result) + len(new_rows)
@@ -532,7 +492,6 @@ def format_output_media(df, media):
         return df
     x = df.copy()
     if media == "GSA":
-        # GSAは標準名がそのまま指定成果物と一致
         return x
     if media == "YSS":
         x = x.rename(columns={
@@ -562,7 +521,6 @@ def _excel_safe_df(df, null_as_text=False):
         out = out.astype(object).where(pd.notna(out), "NULL")
     return out
 
-
 def _write_df_fast(writer, sheet_name, df, null_as_text=False):
     """XlsxWriterで高速出力。全使用セルはMeiryo UI。"""
     wb = writer.book
@@ -578,16 +536,11 @@ def _write_df_fast(writer, sheet_name, df, null_as_text=False):
     })
     date_fmt = wb.add_format({"font_name": "Meiryo UI", "num_format": "yyyy/m/d"})
 
-    # ヘッダーは自前で書く（Pandas既定フォントを使わせない）
     for j, col in enumerate(df.columns):
         ws.write(0, j, str(col), header_fmt)
 
-    # 列単位でフォント/日付書式を適用。全セルを後から走査しないので高速。
     for j, col in enumerate(df.columns):
         series = df[col]
-        # NULL文字列や空欄が先頭にあっても、列内に実日付が1件でもあれば日付列として扱う。
-        # 後方数値データのように日付とNULLが混在する列でも、日付セルを必ず
-        # yyyy/m/d + Meiryo UI で再書込する。
         def _is_real_date(v):
             import datetime as _dt
             return isinstance(v, (pd.Timestamp, _dt.datetime, _dt.date)) and not isinstance(v, str)
@@ -595,8 +548,6 @@ def _write_df_fast(writer, sheet_name, df, null_as_text=False):
         is_date = any(_is_real_date(v) for v in series.head(1000).tolist()) if len(series) else False
         fmt = date_fmt if is_date else base_fmt
 
-        # pandas/XlsxWriter は日付セルに独自書式を付けるため、列書式だけでは
-        # yyyy/m/d・Meiryo UI が反映されないことがある。日付列だけ明示的に再書込する。
         if is_date:
             for i, value in enumerate(series, start=1):
                 if pd.isna(value) or value == "NULL":
@@ -613,10 +564,6 @@ def _write_df_fast(writer, sheet_name, df, null_as_text=False):
                         value = _dt.datetime(value.year, value.month, value.day)
                     ws.write_datetime(i, j, value, date_fmt)
 
-        # 自動幅は全行スキャンせず、先頭200行だけで概算。
-        # 値型に関係なく必ず文字列化してから幅を測る。
-        # Excel由来の列では float / int / Timestamp 等が混在することがあるため、
-        # len(value) を直接呼ばない。
         sample_vals = [
             "" if pd.isna(v) else str(v)
             for v in series.head(200).tolist()
@@ -627,7 +574,6 @@ def _write_df_fast(writer, sheet_name, df, null_as_text=False):
     ws.freeze_panes(1, 0)
     if len(df.columns):
         ws.autofilter(0, 0, max(len(df), 1), len(df.columns) - 1)
-
 
 def _write_cost_diff_sheet(writer, media_order):
     """コスト差分シート。対象媒体はDisplay/Searchごとに切替。"""
@@ -641,7 +587,6 @@ def _write_cost_diff_sheet(writer, media_order):
     hair_text_fmt = wb.add_format({"font_name": "Meiryo UI", "border": 7})
 
     ws.hide_gridlines(2)
-    # B列＋媒体列まで150px固定
     for col_idx in range(0, max(9, 2 + len(media_order))):
         fmt = num_fmt if col_idx >= 2 else text_fmt
         ws.set_column_pixels(col_idx, col_idx, 150, fmt)
@@ -664,7 +609,6 @@ def _write_cost_diff_sheet(writer, media_order):
     ws.write("B5", "ローデータ", text_fmt)
     ws.write("B6", "差分", text_fmt)
 
-
 def to_excel_bytes(backward_out, campaign_df_original, master_original, media_frames, media_order, progress=None, progress_start=0.74, progress_end=1.0):
     """XlsxWriterベースの高速Excel出力。"""
     bio = io.BytesIO()
@@ -684,18 +628,15 @@ def to_excel_bytes(backward_out, campaign_df_original, master_original, media_fr
     ) as writer:
         writer.book.set_calc_mode("auto")
 
-        # 媒体コードマスタは出力ブックの先頭（一番左）に配置
         if progress: progress.progress(0.74, text="Excel：媒体コードマスタver3を書き出し中…")
         _write_df_fast(writer, "媒体コードマスタver3", master_original)
 
-        # 空のコストデータシートを追加
         cost_ws = writer.book.add_worksheet("コストデータ")
         writer.sheets["コストデータ"] = cost_ws
 
         if progress: progress.progress(0.76, text="Excel：後方数値データを書き出し中…")
         _write_df_fast(writer, "後方数値データ(加工版)", b_out, null_as_text=True)
 
-        # 添付シートは後方数値データの直後に配置
         if progress: progress.progress(0.80, text="Excel：コスト差分シートを作成中…")
         _write_cost_diff_sheet(writer, media_order)
 
@@ -714,8 +655,6 @@ def to_excel_bytes(backward_out, campaign_df_original, master_original, media_fr
     if progress: progress.progress(1.0, text="完了！")
     return bio.getvalue()
 
-
-# ダウンロード後の再実行でも成果物を保持する
 if "display_bytes" not in st.session_state:
     st.session_state.display_bytes = None
 if "search_bytes" not in st.session_state:
@@ -748,7 +687,6 @@ with col_search:
 
 file2s = st.file_uploader("媒体ローデータ　※複数可（Display / Search共通）", type=["xlsx", "xlsm"], accept_multiple_files=True)
 
-
 def prepare_base_file(file_obj, label):
     backward = find_first_sheet(file_obj, ["後方数値データ(加工版)"])
     campaign_original = find_first_sheet(file_obj, ["キャンペーン情報", "Campaign"])
@@ -777,14 +715,12 @@ def prepare_base_file(file_obj, label):
         "backward_index": build_backward_index(backward),
     }
 
-
 can_run = bool(file2s) and bool(display_file or search_file)
 if st.button("レポートを作成", type="primary", disabled=not can_run):
     try:
         started_at = time.perf_counter()
         progress = st.progress(0, text="読込・集計中…")
 
-        # 今回アップロードされていない側の古い成果物は消す。
         if display_file is None:
             st.session_state.display_bytes = None
         if search_file is None:
@@ -796,7 +732,6 @@ if st.button("レポートを作成", type="primary", disabled=not can_run):
         if search_file is not None:
             bases["Search"] = prepare_base_file(search_file, "Search")
 
-        # ローデータはDisplay/Search共通で一度だけ読み込む。
         raw_by_media = defaultdict(list)
         skipped = []
         for f in file2s:
@@ -866,7 +801,6 @@ if st.button("レポートを作成", type="primary", disabled=not can_run):
         st.error(str(e))
         st.exception(e)
 
-# 片方だけ作成した場合も、その成果物だけダウンロードできる。
 if st.session_state.display_bytes is not None or st.session_state.search_bytes is not None:
     elapsed = st.session_state.report_elapsed
     if elapsed is not None:
